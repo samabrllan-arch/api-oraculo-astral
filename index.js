@@ -2,14 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const swisseph = require('swisseph');
 const fs = require('fs');
-const https = require('https');
 const path = require('path');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 💡 1. PREPARAMOS EL DIRECTORIO PARA LOS ARCHIVOS DE LA NASA
+// 💡 1. PREPARAMOS EL DIRECTORIO NASA
 const epheDir = path.join(__dirname, 'ephe');
 if (!fs.existsSync(epheDir)) {
     fs.mkdirSync(epheDir);
@@ -85,15 +84,18 @@ app.post('/calcular', async (req, res) => {
         };
 
         const posicionesRaw = [];
-        // 💡 2. AHORA USAMOS SWIEPH PARA EXIGIR MÁXIMA PRECISIÓN CON LOS ARCHIVOS
+        // Intentamos usar los archivos de la NASA si ya se descargaron
         const flag = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_SPEED; 
 
         for (const [nombre, id] of Object.entries(planetasIds)) {
-            const calculado = await calcPlaneta(julianDay, id, flag);
+            let calculado = await calcPlaneta(julianDay, id, flag);
+            
+            // 💡 SISTEMA ANTI-COLAPSO: Si la NASA aún está descargando, usa matemática ligera para salvar la consulta
             if (calculado.error || calculado.longitude === undefined) {
-                console.log(`Ignorando ${nombre}:`, calculado.error);
-                continue;
+                calculado = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED);
             }
+
+            if (calculado.error || calculado.longitude === undefined) continue;
             
             posicionesRaw.push({
                 nombre: nombre, grados_absolutos: calculado.longitude,
@@ -130,42 +132,34 @@ app.post('/calcular', async (req, res) => {
     }
 });
 
-// 💡 3. EL SCRIPT MÁGICO: DESCARGA LOS ARCHIVOS DE LA NASA ANTES DE INICIAR
-const descargarArchivo = (archivo) => {
-    return new Promise((resolve, reject) => {
+// 💡 2. EL AGENTE INVISIBLE: Descarga asíncrona moderna con Fetch
+const descargarArchivosNasa = async () => {
+    const archivos = ['sepl_18.se1', 'semo_18.se1', 'seas_18.se1'];
+    for (const archivo of archivos) {
         const filePath = path.join(epheDir, archivo);
-        if (fs.existsSync(filePath)) return resolve();
-        
-        console.log(`Descargando datos espaciales: ${archivo}...`);
-        https.get(`https://www.astro.com/ftp/swisseph/ephe/${archivo}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0' } // Evita bloqueos
-        }, (res) => {
-            if (res.statusCode !== 200) return reject(new Error(`Error descargando ${archivo}`));
-            const fileStream = fs.createWriteStream(filePath);
-            res.pipe(fileStream);
-            fileStream.on('finish', () => {
-                fileStream.close();
-                console.log(`✅ ${archivo} listo.`);
-                resolve();
-            });
-        }).on('error', reject);
-    });
-};
-
-const iniciarServidor = async () => {
-    try {
-        // Descargamos Planetas, Luna y Asteroides (Quirón)
-        await descargarArchivo('sepl_18.se1');
-        await descargarArchivo('semo_18.se1');
-        await descargarArchivo('seas_18.se1');
-        
-        const PORT = process.env.PORT || 10000;
-        app.listen(PORT, () => {
-            console.log(`🚀 Servidor Astral Pro 100% operativo en puerto ${PORT}`);
-        });
-    } catch (error) {
-        console.error("Fallo crítico al iniciar:", error);
+        if (!fs.existsSync(filePath)) {
+            try {
+                console.log(`Descargando ${archivo}...`);
+                const res = await fetch(`https://www.astro.com/ftp/swisseph/ephe/${archivo}`, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                });
+                if (res.ok) {
+                    const arrayBuffer = await res.arrayBuffer();
+                    fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
+                    console.log(`✅ ${archivo} listo.`);
+                } else {
+                    console.log(`❌ Fallo al descargar ${archivo}`);
+                }
+            } catch (e) {
+                console.log(`❌ Error de red:`, e.message);
+            }
+        }
     }
 };
 
-iniciarServidor();
+const PORT = process.env.PORT || 10000;
+// 💡 3. ENCENDEMOS PRIMERO, DESCARGAMOS DESPUÉS
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor Astral Pro 100% operativo en puerto ${PORT}`);
+    descargarArchivosNasa(); // El empleado invisible se va a descargar sin pausar el servidor
+});
