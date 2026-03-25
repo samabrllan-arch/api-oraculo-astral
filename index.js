@@ -6,10 +6,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configuración de la ruta de las efemérides (archivos de la NASA)
-// La librería swisseph en Node ya incluye los básicos por defecto
-swisseph.swe_set_ephe_path(__dirname + '/ephe');
-
 app.get('/', (req, res) => {
     res.send('🔮 Motor de Cálculos Suizos Activo.');
 });
@@ -18,8 +14,6 @@ app.post('/calcular', (req, res) => {
     try {
         const { dia, mes, anio, hora, lat, lng } = req.body;
 
-        // Convertir hora a Tiempo Universal (UTC)
-        // Por ahora asumimos que el usuario manda UTC, luego ajustamos zonas horarias
         const julianDay = swisseph.swe_julday(anio, mes, dia, hora, swisseph.SE_GREG_CAL);
 
         const planetasIds = {
@@ -37,11 +31,19 @@ app.post('/calcular', (req, res) => {
 
         const resultados = [];
 
-        // Calcular cada planeta
+        // 💡 EL TRUCO: Usamos SEFLG_MOSEPH (4). Es el motor matemático integrado. No requiere archivos extra.
+        // También sumamos SEFLG_SPEED (256) para que nos diga la velocidad (si está retrógrado)
+        const flag = swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED; 
+
         for (const [nombre, id] of Object.entries(planetasIds)) {
-            const calculado = swisseph.swe_calc_ut(julianDay, id, swisseph.SEFLG_SWIEPH);
+            // El servidor intenta hacer el cálculo
+            const calculado = swisseph.swe_calc_ut(julianDay, id, flag);
             
-            // calculado.longitude es el grado absoluto (0-360)
+            // Si la librería devuelve un error en el cálculo, lanzamos la excepción
+            if (calculado.error) {
+                throw new Error(calculado.error);
+            }
+            
             const gradoAbsoluto = calculado.longitude;
             const signoIndex = Math.floor(gradoAbsoluto / 30);
             const gradoEnSigno = gradoAbsoluto % 30;
@@ -51,13 +53,14 @@ app.post('/calcular', (req, res) => {
                 grados_absolutos: gradoAbsoluto,
                 grados: Math.floor(gradoEnSigno),
                 minutos: Math.floor((gradoEnSigno - Math.floor(gradoEnSigno)) * 60),
-                signo_id: signoIndex
+                signo_id: signoIndex,
+                latitud: `${calculado.latitude > 0 ? '+' : ''}${calculado.latitude.toFixed(2)}°`,
+                velocidad: calculado.longitudeSpeed < 0 ? 'Retrógrado' : 'Directo'
             });
         }
 
         // Calcular Casas y Ascendente
         const casas = swisseph.swe_houses(julianDay, lat, lng, 'P'); 
-        // El Ascendente es el índice 0 de points
         resultados.push({
             nombre: 'ascendente',
             grados_absolutos: casas.points[0],
@@ -72,7 +75,9 @@ app.post('/calcular', (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ status: "error", mensaje: error.message });
+        // Ahora si falla, devolverá el mensaje exacto para saber qué pasó
+        console.error("Error en servidor:", error);
+        res.status(500).json({ status: "error", mensaje: error.message || error });
     }
 });
 
