@@ -7,13 +7,31 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.send('🔮 Motor de Cálculos Suizos Activo.');
+    res.send('🔮 Motor de Cálculos Suizos Activo y Asíncrono.');
 });
 
-app.post('/calcular', (req, res) => {
+// 💡 EL TRUCO: Envolver la librería suiza en Promesas para que Node la espere correctamente
+const calcPlaneta = (julianDay, id, flag) => {
+    return new Promise((resolve) => {
+        swisseph.swe_calc_ut(julianDay, id, flag, (resultado) => {
+            resolve(resultado);
+        });
+    });
+};
+
+const calcCasas = (julianDay, lat, lng) => {
+    return new Promise((resolve) => {
+        swisseph.swe_houses(julianDay, lat, lng, 'P', (resultado) => {
+            resolve(resultado);
+        });
+    });
+};
+
+app.post('/calcular', async (req, res) => {
     try {
         const { dia, mes, anio, hora, lat, lng } = req.body;
 
+        // swe_julday sí es instantáneo
         const julianDay = swisseph.swe_julday(anio, mes, dia, hora, swisseph.SE_GREG_CAL);
 
         const planetasIds = {
@@ -26,22 +44,21 @@ app.post('/calcular', (req, res) => {
             saturno: swisseph.SE_SATURN,
             urano: swisseph.SE_URANUS,
             neptuno: swisseph.SE_NEPTUNE,
-            pluton: swisseph.SE_PLUTO
+            pluton: swisseph.SE_PLUTO,
+            node: swisseph.SE_TRUE_NODE,
+            lilith: swisseph.SE_MEAN_APOG
         };
 
         const resultados = [];
-
-        // 💡 EL TRUCO: Usamos SEFLG_MOSEPH (4). Es el motor matemático integrado. No requiere archivos extra.
-        // También sumamos SEFLG_SPEED (256) para que nos diga la velocidad (si está retrógrado)
         const flag = swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED; 
 
+        // 💡 Ahora usamos "await" para esperar a que cada cálculo termine
         for (const [nombre, id] of Object.entries(planetasIds)) {
-            // El servidor intenta hacer el cálculo
-            const calculado = swisseph.swe_calc_ut(julianDay, id, flag);
+            const calculado = await calcPlaneta(julianDay, id, flag);
             
-            // Si la librería devuelve un error en el cálculo, lanzamos la excepción
-            if (calculado.error) {
-                throw new Error(calculado.error);
+            if (calculado.error || calculado.longitude === undefined) {
+                console.log(`Error calculando ${nombre}:`, calculado);
+                continue; 
             }
             
             const gradoAbsoluto = calculado.longitude;
@@ -54,19 +71,21 @@ app.post('/calcular', (req, res) => {
                 grados: Math.floor(gradoEnSigno),
                 minutos: Math.floor((gradoEnSigno - Math.floor(gradoEnSigno)) * 60),
                 signo_id: signoIndex,
-                latitud: `${calculado.latitude > 0 ? '+' : ''}${calculado.latitude.toFixed(2)}°`,
-                velocidad: calculado.longitudeSpeed < 0 ? 'Retrógrado' : 'Directo'
+                latitud: `${calculado.latitude > 0 ? '+' : ''}${calculado.latitude ? calculado.latitude.toFixed(2) : 0}°`,
+                velocidad: (calculado.longitudeSpeed && calculado.longitudeSpeed < 0) ? 'Retrógrado' : 'Directo'
             });
         }
 
-        // Calcular Casas y Ascendente
-        const casas = swisseph.swe_houses(julianDay, lat, lng, 'P'); 
-        resultados.push({
-            nombre: 'ascendente',
-            grados_absolutos: casas.points[0],
-            grados: Math.floor(casas.points[0] % 30),
-            signo_id: Math.floor(casas.points[0] / 30)
-        });
+        // Calcular Casas y Ascendente esperando el resultado
+        const casas = await calcCasas(julianDay, lat, lng); 
+        if (casas && casas.points && casas.points.length > 0) {
+            resultados.push({
+                nombre: 'ascendente',
+                grados_absolutos: casas.points[0],
+                grados: Math.floor(casas.points[0] % 30),
+                signo_id: Math.floor(casas.points[0] / 30)
+            });
+        }
 
         res.json({
             status: "ok",
@@ -75,9 +94,8 @@ app.post('/calcular', (req, res) => {
         });
 
     } catch (error) {
-        // Ahora si falla, devolverá el mensaje exacto para saber qué pasó
         console.error("Error en servidor:", error);
-        res.status(500).json({ status: "error", mensaje: error.message || error });
+        res.status(500).json({ status: "error", mensaje: error.message || "Error desconocido" });
     }
 });
 
