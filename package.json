@@ -1,0 +1,14 @@
+{
+  "name": "api-oraculo-astral",
+  "version": "1.0.0",
+  "description": "Motor de cálculo astrológico",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "swisseph": "^3.0.0"
+  }
+}
