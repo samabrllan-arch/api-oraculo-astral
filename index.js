@@ -7,10 +7,10 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.send('🔮 Motor de Cálculos Suizos Activo y Asíncrono.');
+    res.send('🔮 Motor Astral Pro: Posiciones + Aspectos Geométricos.');
 });
 
-// 💡 EL TRUCO: Envolver la librería suiza en Promesas para que Node la espere correctamente
+// Envolver la librería suiza en Promesas para Node.js
 const calcPlaneta = (julianDay, id, flag) => {
     return new Promise((resolve) => {
         swisseph.swe_calc_ut(julianDay, id, flag, (resultado) => {
@@ -27,11 +27,55 @@ const calcCasas = (julianDay, lat, lng) => {
     });
 };
 
+// 💡 FUNCIÓN MAESTRA: Calcula aspectos geométricos entre planetas
+const calcularAspectos = (planetas) => {
+    const aspectosMap = [];
+    
+    // Definición de aspectos estándar y sus orbes (márgenes de error) profesionales
+    const REGLAS_ASPECTOS = [
+        { nombre: 'conjunción', angulo: 0, orbe: 10, tipo: 'conjunción' },
+        { nombre: 'oposición', angulo: 180, orbe: 10, tipo: 'oposición' },
+        { nombre: 'trígono', angulo: 120, orbe: 8, tipo: 'fluido' },
+        { nombre: 'cuadratura', angulo: 90, orbe: 8, tipo: 'tenso' },
+        { nombre: 'sextil', angulo: 60, orbe: 6, tipo: 'fluido' }
+    ];
+
+    // Comparamos cada planeta con todos los demás (sin repetir)
+    for (let i = 0; i < planetas.length; i++) {
+        for (let j = i + 1; j < planetas.length; j++) {
+            const p1 = planetas[i];
+            const p2 = planetas[j];
+
+            // No calculamos aspectos con el Ascendente aquí (se hace diferente)
+            if (p1.nombre === 'ascendente' || p2.nombre === 'ascendente') continue;
+
+            // Calculamos la distancia más corta en el círculo (0-180°)
+            let distancia = Math.abs(p1.grados_absolutos - p2.grados_absolutos);
+            if (distancia > 180) distancia = 360 - distancia;
+
+            // Verificamos si la distancia encaja en alguna regla
+            for (const regla of REGLAS_ASPECTOS) {
+                const diferenciaConAspecto = Math.abs(distancia - regla.angulo);
+                
+                if (diferenciaConAspecto <= regla.orbe) {
+                    aspectosMap.push({
+                        planeta1: p1.nombre,
+                        planeta2: p2.nombre,
+                        tipo: regla.nombre, 
+                        geometria: regla.tipo, // 'fluido' o 'tenso' para el color
+                        orbe_exacto: diferenciaConAspecto.toFixed(2)
+                    });
+                    break; // Un par de planetas solo puede tener un aspecto mayor
+                }
+            }
+        }
+    }
+    return aspectosMap;
+};
+
 app.post('/calcular', async (req, res) => {
     try {
         const { dia, mes, anio, hora, lat, lng } = req.body;
-
-        // swe_julday sí es instantáneo
         const julianDay = swisseph.swe_julday(anio, mes, dia, hora, swisseph.SE_GREG_CAL);
 
         const planetasIds = {
@@ -46,51 +90,61 @@ app.post('/calcular', async (req, res) => {
             neptuno: swisseph.SE_NEPTUNE,
             pluton: swisseph.SE_PLUTO,
             node: swisseph.SE_TRUE_NODE,
-            lilith: swisseph.SE_MEAN_APOG
+            lilith: swisseph.SE_MEAN_APOG,
+            quiron: swisseph.SE_CHIRON // 💡 ¡NUEVO: Quirón incluido!
         };
 
-        const resultados = [];
+        const posicionesRaw = [];
         const flag = swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED; 
 
-        // 💡 Ahora usamos "await" para esperar a que cada cálculo termine
+        // Esperar cálculos de planetas
         for (const [nombre, id] of Object.entries(planetasIds)) {
             const calculado = await calcPlaneta(julianDay, id, flag);
             
-            if (calculado.error || calculado.longitude === undefined) {
-                console.log(`Error calculando ${nombre}:`, calculado);
-                continue; 
-            }
+            if (calculado.error || calculado.longitude === undefined) continue;
             
             const gradoAbsoluto = calculado.longitude;
-            const signoIndex = Math.floor(gradoAbsoluto / 30);
-            const gradoEnSigno = gradoAbsoluto % 30;
-
-            resultados.push({
+            posicionesRaw.push({
                 nombre: nombre,
                 grados_absolutos: gradoAbsoluto,
-                grados: Math.floor(gradoEnSigno),
-                minutos: Math.floor((gradoEnSigno - Math.floor(gradoEnSigno)) * 60),
-                signo_id: signoIndex,
-                latitud: `${calculado.latitude > 0 ? '+' : ''}${calculado.latitude ? calculado.latitude.toFixed(2) : 0}°`,
-                velocidad: (calculado.longitudeSpeed && calculado.longitudeSpeed < 0) ? 'Retrógrado' : 'Directo'
+                latitud: calculado.latitude,
+                velocidad: calculado.longitudeSpeed
             });
         }
 
         // Calcular Casas y Ascendente esperando el resultado
         const casas = await calcCasas(julianDay, lat, lng); 
         if (casas && casas.points && casas.points.length > 0) {
-            resultados.push({
+            posicionesRaw.push({
                 nombre: 'ascendente',
                 grados_absolutos: casas.points[0],
-                grados: Math.floor(casas.points[0] % 30),
-                signo_id: Math.floor(casas.points[0] / 30)
+                latitud: 0, // No aplica
+                velocidad: 0 // No aplica
             });
         }
 
+        // 💡 MAESTRÍA: Calcular Aspectos Geométricos con los datos reales
+        const aspectosCalculados = calcularAspectos(posicionesRaw);
+
+        // Formatear posiciones finales para el cliente
+        const posicionesFinales = posicionesRaw.map(p => {
+            const signoIndex = Math.floor(p.grados_absolutos / 30);
+            const gradoEnSigno = p.grados_absolutos % 30;
+            return {
+                nombre: p.nombre,
+                grados_absolutos: p.grados_absolutos,
+                grados: Math.floor(gradoEnSigno),
+                minutos: Math.floor((gradoEnSigno - Math.floor(gradoEnSigno)) * 60),
+                signo_id: signoIndex,
+                latitud_raw: p.latitud,
+                velocidad_raw: p.velocidad
+            };
+        });
+
         res.json({
             status: "ok",
-            fecha: `${dia}/${mes}/${anio}`,
-            posiciones: resultados
+            posiciones: posicionesFinales,
+            aspectos: aspectosCalculados // 💡 ¡NUEVO: Líneas geométricas incluidas!
         });
 
     } catch (error) {
