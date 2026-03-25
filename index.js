@@ -132,7 +132,7 @@ app.post('/calcular', async (req, res) => {
     }
 });
 
-// 💡 2. EL AGENTE INVISIBLE: Descarga asíncrona moderna con Fetch
+// 💡 2. EL AGENTE INVISIBLE: Descarga asíncrona (Desde el Mirror oficial en GitHub)
 const descargarArchivosNasa = async () => {
     const archivos = ['sepl_18.se1', 'semo_18.se1', 'seas_18.se1'];
     for (const archivo of archivos) {
@@ -140,15 +140,16 @@ const descargarArchivosNasa = async () => {
         if (!fs.existsSync(filePath)) {
             try {
                 console.log(`Descargando ${archivo}...`);
-                const res = await fetch(`https://www.astro.com/ftp/swisseph/ephe/${archivo}`, {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-                });
+                // 💡 TRUCO PRO: Descargamos desde GitHub para burlar el Firewall anti-bots
+                const url = `https://raw.githubusercontent.com/aloistr/swisseph/master/ephe/${archivo}`;
+                const res = await fetch(url);
+                
                 if (res.ok) {
                     const arrayBuffer = await res.arrayBuffer();
                     fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
                     console.log(`✅ ${archivo} listo.`);
                 } else {
-                    console.log(`❌ Fallo al descargar ${archivo}`);
+                    console.log(`❌ Fallo al descargar ${archivo}: HTTP ${res.status}`);
                 }
             } catch (e) {
                 console.log(`❌ Error de red:`, e.message);
