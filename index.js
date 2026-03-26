@@ -180,22 +180,22 @@ app.post('/calcular', async (req, res) => {
 
         const planetasIds = { sol: swisseph.SE_SUN, luna: swisseph.SE_MOON, mercurio: swisseph.SE_MERCURY, venus: swisseph.SE_VENUS, marte: swisseph.SE_MARS, jupiter: swisseph.SE_JUPITER, saturno: swisseph.SE_SATURN, urano: swisseph.SE_URANUS, neptuno: swisseph.SE_NEPTUNE, pluton: swisseph.SE_PLUTO, node: swisseph.SE_TRUE_NODE, lilith: swisseph.SE_MEAN_APOG, quiron: swisseph.SE_CHIRON };
         const posicionesRaw = [];
-        // 💡 Preparamos ambas banderas: Normal y Ecuador
+        // 💡 Preparamos ambas banderas. Usamos 2048 directamente (código bruto de SEFLG_EQUATORIAL)
         const flagEcliptica = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_SPEED; 
-        const flagEcuador = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_EQUATORIAL; 
+        const flagEcuador = swisseph.SEFLG_SWIEPH | 2048; 
 
         for (const [nombre, id] of Object.entries(planetasIds)) {
             // 1. Calculamos Coordenadas Eclípticas (Zodiaco)
             let calcEcl = await calcPlaneta(julianDay, id, flagEcliptica);
-            if (calcEcl.error || calcEcl.longitude === undefined) {
+            if (calcEcl.error || typeof calcEcl.longitude !== 'number') {
                 calcEcl = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED);
             }
-            if (calcEcl.error || calcEcl.longitude === undefined) continue;
+            if (calcEcl.error || typeof calcEcl.longitude !== 'number') continue;
 
             // 2. Calculamos Coordenadas Ecuatoriales (RA y Declinación)
             let calcEq = await calcPlaneta(julianDay, id, flagEcuador);
-            if (calcEq.error || calcEq.longitude === undefined) {
-                calcEq = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_EQUATORIAL);
+            if (calcEq.error || typeof calcEq.longitude !== 'number') {
+                calcEq = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | 2048);
             }
 
             posicionesRaw.push({ 
@@ -203,8 +203,8 @@ app.post('/calcular', async (req, res) => {
                 grados_absolutos: calcEcl.longitude, 
                 latitud: calcEcl.latitude, 
                 velocidad: calcEcl.longitudeSpeed,
-                ra_raw: calcEq && !calcEq.error ? calcEq.longitude : 0,  // Longitud Ecuatorial = RA
-                decl_raw: calcEq && !calcEq.error ? calcEq.latitude : 0  // Latitud Ecuatorial = Decl
+                ra_raw: (calcEq && typeof calcEq.longitude === 'number') ? calcEq.longitude : 0,
+                decl_raw: (calcEq && typeof calcEq.latitude === 'number') ? calcEq.latitude : 0
             });
         }
 
@@ -219,9 +219,9 @@ app.post('/calcular', async (req, res) => {
         const aspectosCalculados = calcularAspectos(posicionesRaw);
         const dominantes = calcularDominantes(posicionesRaw, aspectosCalculados, casas);
 
-        // Función auxiliar para convertir decimales de RA y Decl en formato "Grados°Minutos'"
+        // 💡 FUNCIÓN BLINDADA ANTI-NAN
         const formatGrados = (decimales, conSigno = false) => {
-            if (decimales === 0) return "0°00'";
+            if (decimales === undefined || decimales === null || isNaN(decimales)) return "0°00'";
             const deg = Math.floor(Math.abs(decimales));
             const min = Math.floor((Math.abs(decimales) - deg) * 60);
             const sign = conSigno ? (decimales >= 0 ? '+' : '-') : '';
