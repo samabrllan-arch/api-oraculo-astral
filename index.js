@@ -82,13 +82,14 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
     const icGrados = mcGrados !== null ? (mcGrados + 180) % 360 : null; // Fondo de Cielo opuesto al MC
     
     // 💡 LÓGICA DE CASAS DE SIGNOS ENTEROS (WHOLE SIGN)
-    const ascSignoIdx = ascGrados !== null ? Math.floor(ascGrados / 30) : 0;
+    const ascSignIdx = ascGrados !== null ? Math.floor(ascGrados / 30) : 0;
     const getCasa = (gradosPlaneta) => {
         const planetaSignoIdx = Math.floor(gradosPlaneta / 30);
-        return ((planetaSignoIdx - ascSignoIdx + 12) % 12) + 1;
+        return ((planetaSignoIdx - ascSignIdx + 12) % 12) + 1;
     };
 
     const checkConj = (deg1, deg2, orbe) => {
+        if (deg1 === null || deg2 === null) return false;
         let dist = Math.abs(deg1 - deg2);
         if (dist > 180) dist = 360 - dist;
         return dist <= orbe;
@@ -253,16 +254,18 @@ app.post('/calcular', async (req, res) => {
         }
 
         // 💡 Cálculo de ASC y MC (¡Con RA y Decl reales basados en su posición matemática!)
+        let ascGrados = null;
         const casas = await calcCasas(julianDay, lat, lng); 
         if (casas) {
-            const ascG = casas.ascendant !== undefined ? casas.ascendant : (casas.points ? casas.points[0] : 0);
-            const mcG = casas.mc !== undefined ? casas.mc : (casas.points ? casas.points[1] : 0);
+            const ascG = casas.ascendant !== undefined ? casas.ascendant : (casas.points ? casas.points[0] : null);
+            const mcG = casas.mc !== undefined ? casas.mc : (casas.points ? casas.points[1] : null);
             
-            if (ascG) {
+            if (ascG !== null) {
+                ascGrados = ascG;
                 const eqAsc = eclipticaAEcuador(ascG, 0); // Latitud del ASC siempre es 0
                 posicionesRaw.push({ nombre: 'ascendente', grados_absolutos: ascG, latitud: 0, velocidad: 0, ra_raw: eqAsc.ra, decl_raw: eqAsc.decl });
             }
-            if (mcG) {
+            if (mcG !== null) {
                 const eqMc = eclipticaAEcuador(mcG, 0); // Latitud del MC siempre es 0
                 posicionesRaw.push({ nombre: 'mc', grados_absolutos: mcG, latitud: 0, velocidad: 0, ra_raw: eqMc.ra, decl_raw: eqMc.decl });
             }
@@ -271,25 +274,49 @@ app.post('/calcular', async (req, res) => {
         const aspectosCalculados = calcularAspectos(posicionesRaw);
         const dominantes = calcularDominantes(posicionesRaw, aspectosCalculados, casas);
 
-        const formatGrados = (decimales, conSigno = false) => {
-            if (decimales === undefined || decimales === null || isNaN(decimales)) return "0°00'";
+        const formatGradosCoordinates = (decimales, conSigno = false) => {
+            if (decimales === undefined || decimales === null || isNaN(decimales)) return "N/A";
             const deg = Math.floor(Math.abs(decimales));
             const min = Math.floor((Math.abs(decimales) - deg) * 60);
             const sign = conSigno ? (decimales >= 0 ? '+' : '-') : '';
             return `${sign}${deg}°${String(min).padStart(2, '0')}'`;
         };
 
-        const posicionesFinales = posicionesRaw.map(p => ({
-            nombre: p.nombre, 
-            grados_absolutos: p.grados_absolutos,
-            grados: Math.floor(p.grados_absolutos % 30), 
-            minutos: Math.floor(((p.grados_absolutos % 30) - Math.floor(p.grados_absolutos % 30)) * 60),
-            signo_id: Math.floor(p.grados_absolutos / 30), 
-            latitud_raw: p.latitud, 
-            velocidad_raw: p.velocidad,
-            ra: formatGrados(p.ra_raw, false), // 💡 Ya no dirá N/A, mostrará el número real
-            decl: formatGrados(p.decl_raw, true) // 💡 Ya no dirá N/A, mostrará el número real
-        }));
+        // 💡 Lógica para asignar las Casas a los planetas y empacar la data final
+        const ascSignIdx = ascGrados !== null ? Math.floor(ascGrados / 30) : 0;
+        const getWholeSignHouseForPlanet = (planetLongitude) => {
+            const planetSignIdx = Math.floor(planetLongitude / 30);
+            return ((planetSignIdx - ascSignIdx + 12) % 12) + 1;
+        };
+
+        const posicionesFinales = [];
+        for (const p of posicionesRaw) {
+            let houseNum = null;
+            let finalName = p.nombre;
+
+            if (p.nombre === 'ascendente') {
+                houseNum = 1;
+                finalName = 'ascendente';
+            } else if (p.nombre === 'mc') {
+                houseNum = null; 
+                finalName = 'mc';
+            } else {
+                houseNum = getWholeSignHouseForPlanet(p.grados_absolutos);
+            }
+
+            posicionesFinales.push({
+                nombre: finalName, 
+                grados_absolutos: p.grados_absolutos,
+                grados: Math.floor(p.grados_absolutos % 30), 
+                minutos: Math.floor(((p.grados_absolutos % 30) - Math.floor(p.grados_absolutos % 30)) * 60),
+                signo_id: Math.floor(p.grados_absolutos / 30),
+                casa: houseNum, 
+                latitud_raw: p.latitud, 
+                velocidad_raw: p.velocidad,
+                ra: formatGradosCoordinates(p.ra_raw, false),
+                decl: formatGradosCoordinates(p.decl_raw, true)
+            });
+        }
 
         res.json({ status: "ok", posiciones: posicionesFinales, aspectos: aspectosCalculados, dominantes: dominantes });
 
