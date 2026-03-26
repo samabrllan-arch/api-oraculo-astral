@@ -12,7 +12,7 @@ const epheDir = path.join(__dirname, 'ephe');
 if (!fs.existsSync(epheDir)) fs.mkdirSync(epheDir);
 swisseph.swe_set_ephe_path(epheDir);
 
-app.get('/', (req, res) => res.send('🔮 Motor Astral Pro (Con Dominantes Reales y Astrofísica).'));
+app.get('/', (req, res) => res.send('🔮 Motor Astral Pro (Signos Enteros + Astrofísica Real).'));
 
 const calcPlaneta = (julianDay, id, flag) => new Promise(resolve => swisseph.swe_calc_ut(julianDay, id, flag, resolve));
 const calcCasas = (julianDay, lat, lng) => new Promise(resolve => swisseph.swe_houses(julianDay, lat, lng, 'P', resolve));
@@ -46,7 +46,7 @@ const calcularAspectos = (planetas) => {
     return aspectosMap;
 };
 
-// 💡 MOTOR DE DOMINANTES COMPLETADO (CASAS, ÁNGULOS Y GOBERNACIONES)
+// 💡 MOTOR DE DOMINANTES CON SISTEMA DE CASAS DE SIGNOS ENTEROS
 const calcularDominantes = (posiciones, aspectos, casas) => {
     const signos = ['aries', 'tauro', 'geminis', 'cancer', 'leo', 'virgo', 'libra', 'escorpio', 'sagitario', 'capricornio', 'acuario', 'piscis'];
     const elementos = ['Fuego', 'Tierra', 'Aire', 'Agua'];
@@ -71,21 +71,6 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
 
     const getElemento = (signoIdx) => elementos[signoIdx % 4];
 
-    // 💡 LÓGICA DE CASAS (Cruzamos los 360 grados para saber en qué casa cayó el planeta)
-    const getCasa = (grados) => {
-        if (!casas || !casas.house || casas.house.length < 12) return 0;
-        for (let i = 0; i < 12; i++) {
-            let curr = casas.house[i];
-            let next = casas.house[(i + 1) % 12];
-            if (curr < next) {
-                if (grados >= curr && grados < next) return i + 1;
-            } else { // Si cruza del grado 359 al grado 0
-                if (grados >= curr || grados < next) return i + 1;
-            }
-        }
-        return 1;
-    };
-
     const asc = posiciones.find(p => p.nombre === 'ascendente');
     const mc = posiciones.find(p => p.nombre === 'mc');
     const sol = posiciones.find(p => p.nombre === 'sol');
@@ -95,6 +80,13 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
     const mcGrados = mc ? mc.grados_absolutos : null;
     const dscGrados = ascGrados !== null ? (ascGrados + 180) % 360 : null; // Descendente opuesto al ASC
     const icGrados = mcGrados !== null ? (mcGrados + 180) % 360 : null; // Fondo de Cielo opuesto al MC
+    
+    // 💡 LÓGICA DE CASAS DE SIGNOS ENTEROS (WHOLE SIGN)
+    const ascSignoIdx = ascGrados !== null ? Math.floor(ascGrados / 30) : 0;
+    const getCasa = (gradosPlaneta) => {
+        const planetaSignoIdx = Math.floor(gradosPlaneta / 30);
+        return ((planetaSignoIdx - ascSignoIdx + 12) % 12) + 1;
+    };
 
     const checkConj = (deg1, deg2, orbe) => {
         let dist = Math.abs(deg1 - deg2);
@@ -145,13 +137,13 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
     posiciones.forEach(p => {
         const signoIdx = Math.floor(p.grados_absolutos / 30);
         const regente = regentes[signos[signoIdx]];
-        if (!domPlanetas[regente]) return; // Si no es uno de los planetas válidos, ignorar
+        if (!domPlanetas[regente]) return;
 
         if (p.nombre === 'ascendente') domPlanetas[regente].gob += 3;
         else if (p.nombre === 'mc') domPlanetas[regente].gob += 1;
         else if (p.nombre === 'sol') domPlanetas[regente].gob += 1;
         else if (p.nombre === 'luna') domPlanetas[regente].gob += 1;
-        else if (validos.includes(p.nombre)) domPlanetas[regente].gob += 1; // Rige a un planeta normal
+        else if (validos.includes(p.nombre)) domPlanetas[regente].gob += 1; 
     });
 
     // 6. Aspectos
@@ -171,7 +163,6 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
         }
     });
 
-    // Formatear Planetas
     let planetasArr = Object.keys(domPlanetas).map(k => {
         const d = domPlanetas[k];
         const suma = d.signo + d.casa + d.angulo + d.gob + d.asp;
@@ -182,10 +173,9 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
         };
     }).sort((a, b) => parseInt(b.suma) - parseInt(a.suma));
 
-    // Calcular Porcentajes Planetas y sumar a Elemento Dominante
     const totalPuntosPlanetas = planetasArr.reduce((acc, p) => acc + parseInt(p.suma), 0);
     planetasArr = planetasArr.map((p, i) => {
-        if (i < 3) { // Top 3 planetas dan +2 a su elemento
+        if (i < 3) {
             const planetaData = posiciones.find(pos => pos.nombre === p.nombre.toLowerCase());
             if (planetaData) {
                 const el = getElemento(Math.floor(planetaData.grados_absolutos / 30));
@@ -195,7 +185,6 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
         return { ...p, pct: totalPuntosPlanetas > 0 ? ((parseInt(p.suma) / totalPuntosPlanetas) * 100).toFixed(2) + '%' : '0%' };
     });
 
-    // Formatear Elementos
     let elementosArr = Object.keys(domElementos).map(k => {
         const d = domElementos[k];
         const suma = d.sol + d.pers + d.trans + d.dom;
@@ -263,14 +252,20 @@ app.post('/calcular', async (req, res) => {
             });
         }
 
-        // 💡 Calculamos las casas y extraemos el ASC y el MC para agregarlos a las posiciones
+        // 💡 Cálculo de ASC y MC (¡Con RA y Decl reales basados en su posición matemática!)
         const casas = await calcCasas(julianDay, lat, lng); 
         if (casas) {
             const ascG = casas.ascendant !== undefined ? casas.ascendant : (casas.points ? casas.points[0] : 0);
             const mcG = casas.mc !== undefined ? casas.mc : (casas.points ? casas.points[1] : 0);
             
-            if (ascG) posicionesRaw.push({ nombre: 'ascendente', grados_absolutos: ascG, latitud: 0, velocidad: 0, ra_raw: 0, decl_raw: 0 });
-            if (mcG) posicionesRaw.push({ nombre: 'mc', grados_absolutos: mcG, latitud: 0, velocidad: 0, ra_raw: 0, decl_raw: 0 });
+            if (ascG) {
+                const eqAsc = eclipticaAEcuador(ascG, 0); // Latitud del ASC siempre es 0
+                posicionesRaw.push({ nombre: 'ascendente', grados_absolutos: ascG, latitud: 0, velocidad: 0, ra_raw: eqAsc.ra, decl_raw: eqAsc.decl });
+            }
+            if (mcG) {
+                const eqMc = eclipticaAEcuador(mcG, 0); // Latitud del MC siempre es 0
+                posicionesRaw.push({ nombre: 'mc', grados_absolutos: mcG, latitud: 0, velocidad: 0, ra_raw: eqMc.ra, decl_raw: eqMc.decl });
+            }
         }
 
         const aspectosCalculados = calcularAspectos(posicionesRaw);
@@ -292,8 +287,8 @@ app.post('/calcular', async (req, res) => {
             signo_id: Math.floor(p.grados_absolutos / 30), 
             latitud_raw: p.latitud, 
             velocidad_raw: p.velocidad,
-            ra: (p.nombre === 'ascendente' || p.nombre === 'mc') ? "N/A" : formatGrados(p.ra_raw, false),
-            decl: (p.nombre === 'ascendente' || p.nombre === 'mc') ? "N/A" : formatGrados(p.decl_raw, true)
+            ra: formatGrados(p.ra_raw, false), // 💡 Ya no dirá N/A, mostrará el número real
+            decl: formatGrados(p.decl_raw, true) // 💡 Ya no dirá N/A, mostrará el número real
         }));
 
         res.json({ status: "ok", posiciones: posicionesFinales, aspectos: aspectosCalculados, dominantes: dominantes });
