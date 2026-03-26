@@ -325,7 +325,47 @@ app.post('/calcular', async (req, res) => {
         res.status(500).json({ status: "error", mensaje: error.message || "Error desconocido" });
     }
 });
+// 💡 NUEVA RUTA: Conexión con la IA de DeepSeek
+app.post('/analisis', async (req, res) => {
+    try {
+        const { nombre, sol, luna, ascendente, dominantes } = req.body;
+        
+        // Creamos el prompt (instrucción) para la IA
+        const prompt = `Actúa como un astrólogo profesional, empático y profundo. Haz un breve análisis de la carta astral de ${nombre}.
+Sus datos principales son:
+- Sol en ${sol}
+- Luna en ${luna}
+- Ascendente en ${ascendente}
+- Planetas dominantes: ${dominantes.planetas.join(', ')}
+- Elemento dominante: ${dominantes.elemento}
 
+Escribe un análisis de 3 párrafos fluidos y directos. 
+IMPORTANTE: NO uses asteriscos (**), ni numerales (#), ni formato Markdown. Usa solo texto plano con saltos de línea y emojis para decorar.`;
+
+        const response = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: 'deepseek-chat',
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.7
+            })
+        });
+
+        const data = await response.json();
+        if (data.choices && data.choices.length > 0) {
+            res.json({ status: "ok", analisis: data.choices[0].message.content });
+        } else {
+            throw new Error("No se obtuvo respuesta de la IA.");
+        }
+    } catch (error) {
+        console.error("Error en DeepSeek:", error);
+        res.status(500).json({ status: "error", mensaje: error.message });
+    }
+});
 const descargarArchivosNasa = async () => {
     const archivos = ['sepl_18.se1', 'semo_18.se1', 'seas_18.se1'];
     for (const archivo of archivos) {
