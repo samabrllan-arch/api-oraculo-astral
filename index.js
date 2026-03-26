@@ -12,7 +12,7 @@ const epheDir = path.join(__dirname, 'ephe');
 if (!fs.existsSync(epheDir)) fs.mkdirSync(epheDir);
 swisseph.swe_set_ephe_path(epheDir);
 
-app.get('/', (req, res) => res.send('🔮 Motor Astral Pro (Con Dominantes).'));
+app.get('/', (req, res) => res.send('🔮 Motor Astral Pro (Con Dominantes y Astrofísica).'));
 
 const calcPlaneta = (julianDay, id, flag) => new Promise(resolve => swisseph.swe_calc_ut(julianDay, id, flag, resolve));
 const calcCasas = (julianDay, lat, lng) => new Promise(resolve => swisseph.swe_houses(julianDay, lat, lng, 'P', resolve));
@@ -173,38 +173,61 @@ const calcularDominantes = (posiciones, aspectos, casas) => {
     return { planetas: planetasArr, elementos: elementosArr };
 };
 
+// 💡 NUEVA FUNCIÓN: Trigonometría esférica pura (¡Nunca falla, no depende de banderas raras!)
+const eclipticaAEcuador = (lonDeg, latDeg) => {
+    const rad = Math.PI / 180;
+    const deg = 180 / Math.PI;
+    const eps = 23.4392911 * rad; // Inclinación del eje de la Tierra (Oblicuidad de la eclíptica)
+    
+    const lon = lonDeg * rad;
+    const lat = latDeg * rad;
+    
+    // Fórmulas de conversión matemática pura a 3D
+    const x = Math.cos(lat) * Math.cos(lon);
+    const y = Math.cos(lat) * Math.sin(lon) * Math.cos(eps) - Math.sin(lat) * Math.sin(eps);
+    const z = Math.cos(lat) * Math.sin(lon) * Math.sin(eps) + Math.sin(lat) * Math.cos(eps);
+    
+    let ra = Math.atan2(y, x) * deg;
+    if (ra < 0) ra += 360;
+    const decl = Math.asin(z) * deg;
+    
+    return { ra, decl };
+};
+
 app.post('/calcular', async (req, res) => {
     try {
         const { dia, mes, anio, hora, lat, lng } = req.body;
         const julianDay = swisseph.swe_julday(anio, mes, dia, hora, swisseph.SE_GREG_CAL);
 
-        const planetasIds = { sol: swisseph.SE_SUN, luna: swisseph.SE_MOON, mercurio: swisseph.SE_MERCURY, venus: swisseph.SE_VENUS, marte: swisseph.SE_MARS, jupiter: swisseph.SE_JUPITER, saturno: swisseph.SE_SATURN, urano: swisseph.SE_URANUS, neptuno: swisseph.SE_NEPTUNE, pluton: swisseph.SE_PLUTO, node: swisseph.SE_TRUE_NODE, lilith: swisseph.SE_MEAN_APOG, quiron: swisseph.SE_CHIRON };
+        const planetasIds = {
+            sol: swisseph.SE_SUN, luna: swisseph.SE_MOON, mercurio: swisseph.SE_MERCURY,
+            venus: swisseph.SE_VENUS, marte: swisseph.SE_MARS, jupiter: swisseph.SE_JUPITER,
+            saturno: swisseph.SE_SATURN, urano: swisseph.SE_URANUS, neptuno: swisseph.SE_NEPTUNE,
+            pluton: swisseph.SE_PLUTO, node: swisseph.SE_TRUE_NODE, lilith: swisseph.SE_MEAN_APOG,
+            quiron: swisseph.SE_CHIRON
+        };
+
         const posicionesRaw = [];
-        // 💡 Preparamos ambas banderas. Usamos 2048 directamente (código bruto de SEFLG_EQUATORIAL)
-        const flagEcliptica = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_SPEED; 
-        const flagEcuador = swisseph.SEFLG_SWIEPH | 2048; 
+        const flag = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_SPEED; 
 
         for (const [nombre, id] of Object.entries(planetasIds)) {
-            // 1. Calculamos Coordenadas Eclípticas (Zodiaco)
-            let calcEcl = await calcPlaneta(julianDay, id, flagEcliptica);
-            if (calcEcl.error || typeof calcEcl.longitude !== 'number') {
-                calcEcl = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED);
+            // 1. Calculamos las coordenadas del Zodiaco (Esto sabemos que sí funciona 100%)
+            let calculado = await calcPlaneta(julianDay, id, flag);
+            if (calculado.error || typeof calculado.longitude !== 'number') {
+                calculado = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED);
             }
-            if (calcEcl.error || typeof calcEcl.longitude !== 'number') continue;
+            if (calculado.error || typeof calculado.longitude !== 'number') continue;
 
-            // 2. Calculamos Coordenadas Ecuatoriales (RA y Declinación)
-            let calcEq = await calcPlaneta(julianDay, id, flagEcuador);
-            if (calcEq.error || typeof calcEq.longitude !== 'number') {
-                calcEq = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | 2048);
-            }
+            // 2. 💡 Convertimos esas coordenadas perfectas a Ecuador usando nuestra propia matemática
+            const ecuador = eclipticaAEcuador(calculado.longitude, calculado.latitude);
 
             posicionesRaw.push({ 
                 nombre, 
-                grados_absolutos: calcEcl.longitude, 
-                latitud: calcEcl.latitude, 
-                velocidad: calcEcl.longitudeSpeed,
-                ra_raw: (calcEq && typeof calcEq.longitude === 'number') ? calcEq.longitude : 0,
-                decl_raw: (calcEq && typeof calcEq.latitude === 'number') ? calcEq.latitude : 0
+                grados_absolutos: calculado.longitude, 
+                latitud: calculado.latitude, 
+                velocidad: calculado.longitudeSpeed,
+                ra_raw: ecuador.ra,       // Ascensión Recta calculada
+                decl_raw: ecuador.decl    // Declinación calculada
             });
         }
 
@@ -241,7 +264,11 @@ app.post('/calcular', async (req, res) => {
         }));
 
         res.json({ status: "ok", posiciones: posicionesFinales, aspectos: aspectosCalculados, dominantes: dominantes });
-    } catch (error) { res.status(500).json({ status: "error", mensaje: error.message }); }
+
+    } catch (error) {
+        console.error("Error en servidor:", error);
+        res.status(500).json({ status: "error", mensaje: error.message || "Error desconocido" });
+    }
 });
 
 const descargarArchivosNasa = async () => {
