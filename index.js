@@ -180,27 +180,64 @@ app.post('/calcular', async (req, res) => {
 
         const planetasIds = { sol: swisseph.SE_SUN, luna: swisseph.SE_MOON, mercurio: swisseph.SE_MERCURY, venus: swisseph.SE_VENUS, marte: swisseph.SE_MARS, jupiter: swisseph.SE_JUPITER, saturno: swisseph.SE_SATURN, urano: swisseph.SE_URANUS, neptuno: swisseph.SE_NEPTUNE, pluton: swisseph.SE_PLUTO, node: swisseph.SE_TRUE_NODE, lilith: swisseph.SE_MEAN_APOG, quiron: swisseph.SE_CHIRON };
         const posicionesRaw = [];
-        const flag = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_SPEED; 
+        // 💡 Preparamos ambas banderas: Normal y Ecuador
+        const flagEcliptica = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_SPEED; 
+        const flagEcuador = swisseph.SEFLG_SWIEPH | swisseph.SEFLG_EQUATORIAL; 
 
         for (const [nombre, id] of Object.entries(planetasIds)) {
-            let calculado = await calcPlaneta(julianDay, id, flag);
-            if (calculado.error || calculado.longitude === undefined) calculado = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED);
-            if (calculado.error || calculado.longitude === undefined) continue;
-            posicionesRaw.push({ nombre, grados_absolutos: calculado.longitude, latitud: calculado.latitude, velocidad: calculado.longitudeSpeed });
+            // 1. Calculamos Coordenadas Eclípticas (Zodiaco)
+            let calcEcl = await calcPlaneta(julianDay, id, flagEcliptica);
+            if (calcEcl.error || calcEcl.longitude === undefined) {
+                calcEcl = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_SPEED);
+            }
+            if (calcEcl.error || calcEcl.longitude === undefined) continue;
+
+            // 2. Calculamos Coordenadas Ecuatoriales (RA y Declinación)
+            let calcEq = await calcPlaneta(julianDay, id, flagEcuador);
+            if (calcEq.error || calcEq.longitude === undefined) {
+                calcEq = await calcPlaneta(julianDay, id, swisseph.SEFLG_MOSEPH | swisseph.SEFLG_EQUATORIAL);
+            }
+
+            posicionesRaw.push({ 
+                nombre, 
+                grados_absolutos: calcEcl.longitude, 
+                latitud: calcEcl.latitude, 
+                velocidad: calcEcl.longitudeSpeed,
+                ra_raw: calcEq && !calcEq.error ? calcEq.longitude : 0,  // Longitud Ecuatorial = RA
+                decl_raw: calcEq && !calcEq.error ? calcEq.latitude : 0  // Latitud Ecuatorial = Decl
+            });
         }
 
         const casas = await calcCasas(julianDay, lat, lng); 
-        if (casas && casas.points && casas.points.length > 0) posicionesRaw.push({ nombre: 'ascendente', grados_absolutos: casas.points[0], latitud: 0, velocidad: 0 });
+        if (casas && casas.points && casas.points.length > 0) {
+            posicionesRaw.push({ 
+                nombre: 'ascendente', grados_absolutos: casas.points[0], 
+                latitud: 0, velocidad: 0, ra_raw: 0, decl_raw: 0 
+            });
+        }
 
         const aspectosCalculados = calcularAspectos(posicionesRaw);
-        
-        // 💡 LLAMADA AL MOTOR DE DOMINANTES
         const dominantes = calcularDominantes(posicionesRaw, aspectosCalculados, casas);
 
+        // Función auxiliar para convertir decimales de RA y Decl en formato "Grados°Minutos'"
+        const formatGrados = (decimales, conSigno = false) => {
+            if (decimales === 0) return "0°00'";
+            const deg = Math.floor(Math.abs(decimales));
+            const min = Math.floor((Math.abs(decimales) - deg) * 60);
+            const sign = conSigno ? (decimales >= 0 ? '+' : '-') : '';
+            return `${sign}${deg}°${String(min).padStart(2, '0')}'`;
+        };
+
         const posicionesFinales = posicionesRaw.map(p => ({
-            nombre: p.nombre, grados_absolutos: p.grados_absolutos,
-            grados: Math.floor(p.grados_absolutos % 30), minutos: Math.floor(((p.grados_absolutos % 30) - Math.floor(p.grados_absolutos % 30)) * 60),
-            signo_id: Math.floor(p.grados_absolutos / 30), latitud_raw: p.latitud, velocidad_raw: p.velocidad
+            nombre: p.nombre, 
+            grados_absolutos: p.grados_absolutos,
+            grados: Math.floor(p.grados_absolutos % 30), 
+            minutos: Math.floor(((p.grados_absolutos % 30) - Math.floor(p.grados_absolutos % 30)) * 60),
+            signo_id: Math.floor(p.grados_absolutos / 30), 
+            latitud_raw: p.latitud, 
+            velocidad_raw: p.velocidad,
+            ra: p.nombre === 'ascendente' ? "N/A" : formatGrados(p.ra_raw, false),
+            decl: p.nombre === 'ascendente' ? "N/A" : formatGrados(p.decl_raw, true)
         }));
 
         res.json({ status: "ok", posiciones: posicionesFinales, aspectos: aspectosCalculados, dominantes: dominantes });
